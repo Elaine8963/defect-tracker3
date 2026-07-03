@@ -1440,6 +1440,25 @@ async function generateReturnNoticeExcel(){
       return;
     }
 
+    // ── 倉別收退時間設定表 ──
+    // 依倉別 whKey 設定對應的說明文字（第6、7列）
+    const WAREHOUSE_NOTICE = {
+      'kaolog': {
+        // 岡山倉：08:00~16:00
+        line1: '收退時間：周一至周五 08：00~16：00',
+        line2: '請於收件後三個工作天內收退完，並請回覆來收退時間，謝謝。'
+      },
+      'dadu01': {
+        // 大肚倉：09:30~13:00 / 14:00~16:30
+        line1: '收退時間：周一至周五 09：30~13：00　下午 14：00~16：30',
+        line2: '請於收件後三個工作天內收退完，並請回覆來收退時間，謝謝。'
+      }
+    };
+
+    // 取得目前登入倉別的說明文字，預設使用岡山倉設定
+    const whKey = currentUser ? (currentUser.whKey || 'kaolog') : 'kaolog';
+    const noticeText = WAREHOUSE_NOTICE[whKey] || WAREHOUSE_NOTICE['kaolog'];
+
     // ── 2. 依供應商代號分組 ──
     const supGroups = {};
     checkedBoxes.forEach(cb => {
@@ -1589,9 +1608,9 @@ async function generateReturnNoticeExcel(){
       worksheet.mergeCells(`A${ROW_BOX_1}:B${ROW_BOX_2}`);
       worksheet.mergeCells(`C${ROW_BOX_1}:E${ROW_BOX_2}`);
 
-      // ── 說明列 1：收退時間（淡黃底 + 紅字）──
+      // ── 說明列 1：收退時間（淡黃底 + 紅字，依倉別帶入對應時間）──
       const notice1Row = worksheet.addRow([
-        '收退時間：周一至周五 08：00~16：00','','','',''
+        noticeText.line1,'','','',''
       ]);
       notice1Row.height = 20.1;
       for(let ci=1; ci<=5; ci++){
@@ -1606,7 +1625,7 @@ async function generateReturnNoticeExcel(){
 
       // ── 說明列 2：請於收件後（淡黃底 + 紅字，最底列）──
       const notice2Row = worksheet.addRow([
-        '請於收件後三個工作天內收退完，並請回覆來收退時間，謝謝。','','','',''
+        noticeText.line2,'','','',''
       ]);
       notice2Row.height = 20.1;
       for(let ci=1; ci<=5; ci++){
