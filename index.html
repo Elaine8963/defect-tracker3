@@ -181,7 +181,8 @@ body{font-family:'Helvetica Neue','PingFang TC','Microsoft JhengHei',sans-serif;
 }
 .dash-cards{
   display:grid;
-  grid-template-columns:repeat(7,1fr);
+  /* 桌面：8張卡片用4欄排列，2排剛好整齊 */
+  grid-template-columns:repeat(4,1fr);
   gap:12px;
   width:100%;
   max-width:1200px;
@@ -197,7 +198,7 @@ body{font-family:'Helvetica Neue','PingFang TC','Microsoft JhengHei',sans-serif;
     margin:0;
     width:100%;
   }
-  #card-expiry{ grid-column:1 / -1; }
+  /* 8張卡片（偶數），2欄排列剛好 4 排，不需要跨欄 */
 }
 .stat-card{
   background:var(--surface);border-radius:var(--r-lg);border:1px solid var(--border);
@@ -223,6 +224,8 @@ body{font-family:'Helvetica Neue','PingFang TC','Microsoft JhengHei',sans-serif;
 .card-trans{border-left:4px solid var(--blue);}.card-trans .stat-card-val{color:var(--blue);}
 .card-ret{border-left:4px solid #ef4444;}.card-ret .stat-card-val{color:var(--coral);}
 .card-swap{border-left:4px solid var(--teal);}.card-swap .stat-card-val{color:var(--teal);}
+/* 已發信通知廠商：橘色系，代表已通知等待廠商回應 */
+.card-notified{border-left:4px solid #f97316;}.card-notified .stat-card-val{color:#ea580c;}
 #table-view{display:none;flex-direction:row;width:100%;height:calc(100vh - var(--header-h));}
 #sidebar{width:220px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);padding:12px 0;display:none;flex-direction:column;gap:2px;overflow-y:auto;transition:width .2s;}
 #sidebar.collapsed{width:52px;}
@@ -1138,6 +1141,11 @@ input[type=checkbox]{width:15px;height:15px;cursor:pointer;accent-color:#1a1917;
         <div class="stat-card-icon">🔁</div><div class="stat-card-val" id="st-swap">—</div>
         <div class="stat-card-label">不良換</div><div class="stat-card-sub">商流回覆：不良換</div>
       </div>
+      <!-- 已發信通知廠商：notifyDate 有填寫的品項，方便現場人員快速找到待打包商品 -->
+      <div class="stat-card card-notified" onclick="showTable('notified')" id="card-notified">
+        <div class="stat-card-icon">📧</div><div class="stat-card-val" id="st-notified">—</div>
+        <div class="stat-card-label">已發信通知</div><div class="stat-card-sub">已通知廠商待收退</div>
+      </div>
       <div class="stat-card" onclick="showTable('expiry')" id="card-expiry" style="border-left:4px solid #8b5cf6">
         <div class="stat-card-icon">🕐</div><div class="stat-card-val" id="st-expiry" style="color:#7c3aed">—</div>
         <div class="stat-card-label">效期品</div><div class="stat-card-sub">已標記效期品項</div>
@@ -1156,6 +1164,8 @@ input[type=checkbox]{width:15px;height:15px;cursor:pointer;accent-color:#1a1917;
       <div class="sidebar-item" id="sidebar-trans" onclick="filterByCard('trans')"><div class="sidebar-icon">🔄</div><div class="sidebar-info"><div class="sidebar-label">轉不良</div></div><div class="sidebar-val" id="sb-val-trans">—</div></div>
       <div class="sidebar-item" id="sidebar-ret" onclick="filterByCard('ret')"><div class="sidebar-icon">↩️</div><div class="sidebar-info"><div class="sidebar-label">不良退</div></div><div class="sidebar-val" id="sb-val-ret">—</div></div>
       <div class="sidebar-item" id="sidebar-swap" onclick="filterByCard('swap')"><div class="sidebar-icon">🔁</div><div class="sidebar-info"><div class="sidebar-label">不良換</div></div><div class="sidebar-val" id="sb-val-swap">—</div></div>
+      <!-- 已發信通知廠商：快速找到已通知廠商、待打包的品項 -->
+      <div class="sidebar-item" id="sidebar-notified" onclick="filterByCard('notified')"><div class="sidebar-icon">📧</div><div class="sidebar-info"><div class="sidebar-label">已發信通知</div></div><div class="sidebar-val" id="sb-val-notified">—</div></div>
       <div class="sidebar-item" id="sidebar-expiry" onclick="filterByCard('expiry')"><div class="sidebar-icon">🕐</div><div class="sidebar-info"><div class="sidebar-label">效期品</div></div><div class="sidebar-val" id="sb-val-expiry">—</div></div>
     </div>
     <div class="table-area">
@@ -1897,38 +1907,78 @@ function updateSortHeaders(prefix, state) {
 // 3. 不良換（反映日期由舊到新）
 // 4. 轉不良（反映日期由舊到新）
 // 5. 其餘
+// ── 預設排序優先級 ──
+// 0 = 有廠商收退日（最優先）
+// 1 = 不良退
+// 2 = 不良換
+// 3 = 轉不良
+// 4 = 其餘（待處理等）
 function defaultPriority(r){
-  if(r.returnDate) return 0;         // 有廠商收退日最優先
+  if(r.returnDate) return 0;
   if(r.reply==='不良退') return 1;
   if(r.reply==='不良換') return 2;
   if(r.reply==='轉不良') return 3;
   return 4;
 }
+
+// ── 排序核心函式 ──
+// 無手動排序時的預設排序規則：
+//   第一鍵：商流分類優先級（不良退 > 不良換 > 轉不良）
+//   第二鍵：供應商代號（相同商流內，同廠商排在一起）
+//   第三鍵：反映日期由舊到新（同廠商內按時間排）
+// 手動點擊欄位標頭時：依欄位+方向排序
 function applySortToRows(rows, state){
-  // 有手動排序：照欄位排
-  if(state.field){
-    const f=state.field, dir=state.dir;
-    return [...rows].sort(function(a,b){
-      let va=a[f]??'', vb=b[f]??'';
-      if(f==='qty'||f==='sn'){ va=Number(va)||0; vb=Number(vb)||0; return dir==='asc'?va-vb:vb-va; }
-      if(f==='date'||f==='returnDate'||f==='updatedAt'||f==='notifyDate'||f==='expiryDate'){ va=va||'zzzz'; vb=vb||'zzzz'; }
-      const cmp=String(va).localeCompare(String(vb),'zh-TW',{numeric:true});
-      return dir==='asc'?cmp:-cmp;
-    });
-  }
-  // 無手動排序：套用預設優先順序
-  return [...rows].sort(function(a,b){
-    const pa=defaultPriority(a), pb=defaultPriority(b);
-    if(pa!==pb) return pa-pb;
-    // 同優先級：有廠商收退日的由近到遠
-    if(pa===0){
-      const da=a.returnDate||'9999', db=b.returnDate||'9999';
-      return da.localeCompare(db);
+  try{
+    // ── 手動排序：依欄位與方向排列 ──
+    if(state.field){
+      const f=state.field, dir=state.dir;
+      return [...rows].sort(function(a,b){
+        let va=a[f]??'', vb=b[f]??'';
+        // 數字欄位用數值比較
+        if(f==='qty'||f==='sn'){
+          va=Number(va)||0; vb=Number(vb)||0;
+          return dir==='asc'?va-vb:vb-va;
+        }
+        // 日期欄位：空值排到最後
+        if(f==='date'||f==='returnDate'||f==='updatedAt'||f==='notifyDate'||f==='expiryDate'){
+          va=va||'zzzz'; vb=vb||'zzzz';
+        }
+        const cmp=String(va).localeCompare(String(vb),'zh-TW',{numeric:true});
+        return dir==='asc'?cmp:-cmp;
+      });
     }
-    // 其餘：反映日期由舊到新（空值排後面）
-    const da=a.date||'9999', db=b.date||'9999';
-    return da.localeCompare(db);
-  });
+
+    // ── 預設排序：商流分類 → 供應商 → 反映日期 ──
+    return [...rows].sort(function(a,b){
+      // 第一鍵：商流分類優先級
+      const pa=defaultPriority(a), pb=defaultPriority(b);
+      if(pa!==pb) return pa-pb;
+
+      // 第二鍵（priority=0 有收退日的）：收退日由近到遠
+      if(pa===0){
+        const da=a.returnDate||'9999', db=b.returnDate||'9999';
+        if(da!==db) return da.localeCompare(db);
+        // 收退日相同時，同廠商排在一起
+        const sa=a.sup||'', sb=b.sup||'';
+        if(sa!==sb) return sa.localeCompare(sb,'zh-TW',{numeric:true});
+        return (a.date||'9999').localeCompare(b.date||'9999');
+      }
+
+      // 第二鍵（其他商流）：同廠商排在一起
+      // 優先用供應商代號排序，讓相同廠商的品項聚在一起
+      const sa=a.sup||'', sb=b.sup||'';
+      if(sa!==sb) return sa.localeCompare(sb,'zh-TW',{numeric:true});
+
+      // 第三鍵：同廠商內按反映日期由舊到新（空值排後面）
+      const da=a.date||'9999', db=b.date||'9999';
+      return da.localeCompare(db);
+    });
+
+  }catch(err){
+    // 排序失敗時返回原始陣列，不影響顯示
+    console.error('applySortToRows error:', err);
+    return rows;
+  }
 }
 
 // ── 沿用上筆：將最近一筆廠退紀錄的共用資訊填入新增表單 ──
@@ -2558,21 +2608,28 @@ function showDashboard(){
     dc.style.margin = '0 auto';
     dc.style.maxWidth = '1200px';
     if(window.innerWidth <= 768){
+      // 手機：2欄，8張卡片剛好4排，不需要跨欄
       dc.style.gridTemplateColumns = 'repeat(2,1fr)';
       dc.style.gap = '8px';
       dc.style.margin = '0';
     } else {
-      dc.style.gridTemplateColumns = 'repeat(7,1fr)';
+      // 桌面：8張卡片，4欄排列（比7欄更整齊）
+      dc.style.gridTemplateColumns = 'repeat(4,1fr)';
       dc.style.gap = '12px';
     }
   }
+  // 移除效期品跨欄設定（8張卡片不需要）
   const expiry = document.getElementById('card-expiry');
-  if(expiry && window.innerWidth <= 768){
-    expiry.style.gridColumn = '1 / -1';
-  }
+  if(expiry) expiry.style.gridColumn = '';
+
   const main = document.querySelector('.main');
   if(main){ main.style.display = 'block'; }
-  // 強制捲到最頂部，防止通知視窗把頁面拉到底部
+
+  // 重設所有全域篩選旗標
+  window._filterExpiry   = false;
+  window._filterNotified = false;
+
+  // 強制捲到最頂部
   window.scrollTo(0, 0);
   document.documentElement.scrollTop = 0;
   document.body.scrollTop = 0;
@@ -2922,8 +2979,10 @@ function renderTable(){
     if(fC&&r.cat!==fC)return false;
     if(fO==='1'&&!isOverdue(r))return false;
     if(fS&&r.sup!==fS)return false;
-    // 效期品篩選（從提醒視窗點進來時啟用）
+    // 效期品篩選（從效期品卡片點進來時啟用）
     if(window._filterExpiry && !r.isExpiry)return false;
+    // 已發信通知廠商篩選（從「已發信通知」卡片點進來時啟用）
+    if(window._filterNotified && (!r.notifyDate || r.notifyDate===''))return false;
     return true;
   });
   rows = applySortToRows(rows, sortState); // 套用排序
@@ -2990,21 +3049,38 @@ function renderTable(){
   renderMobileCards(rows);
 }
 function updateStats(){
-  const tot=records.length,pend=records.filter(function(r){return !r.reply;}).length,ov=records.filter(function(r){return isOverdue(r);}).length;
-  const tr=records.filter(function(r){return r.reply==='轉不良';}).length,ret=records.filter(function(r){return r.reply==='不良退';}).length,sw=records.filter(function(r){return r.reply==='不良換';}).length;
-  const ex=records.filter(function(r){return r.isExpiry;}).length;
-  // 更新儀表板數字
-  document.getElementById('st-total').textContent=tot;
-  document.getElementById('st-pending').textContent=pend;
-  document.getElementById('st-overdue').textContent=ov;
-  document.getElementById('st-trans').textContent=tr;
-  document.getElementById('st-ret').textContent=ret;
-  document.getElementById('st-swap').textContent=sw;
-  document.getElementById('st-expiry').textContent=ex;  // ← 效期品數量
-  // 更新側邊欄數字
-  var sm={all:tot,pending:pend,overdue:ov,trans:tr,ret:ret,swap:sw,expiry:ex};
-  Object.keys(sm).forEach(function(k){var el=document.getElementById('sb-val-'+k);if(el)el.textContent=sm[k];});
-  updateSupFilter();
+  try{
+    const tot=records.length;
+    const pend=records.filter(function(r){return !r.reply;}).length;
+    const ov=records.filter(function(r){return isOverdue(r);}).length;
+    const tr=records.filter(function(r){return r.reply==='轉不良';}).length;
+    const ret=records.filter(function(r){return r.reply==='不良退';}).length;
+    const sw=records.filter(function(r){return r.reply==='不良換';}).length;
+    const ex=records.filter(function(r){return r.isExpiry;}).length;
+    // 已發信通知廠商：notifyDate 有填寫日期的品項
+    const notified=records.filter(function(r){return r.notifyDate&&r.notifyDate!=='';}).length;
+
+    // ── 更新儀表板卡片數字 ──
+    document.getElementById('st-total').textContent=tot;
+    document.getElementById('st-pending').textContent=pend;
+    document.getElementById('st-overdue').textContent=ov;
+    document.getElementById('st-trans').textContent=tr;
+    document.getElementById('st-ret').textContent=ret;
+    document.getElementById('st-swap').textContent=sw;
+    document.getElementById('st-expiry').textContent=ex;
+    document.getElementById('st-notified').textContent=notified; // ← 已發信通知廠商數量
+
+    // ── 更新側邊欄數字 ──
+    var sm={all:tot,pending:pend,overdue:ov,trans:tr,ret:ret,swap:sw,expiry:ex,notified:notified};
+    Object.keys(sm).forEach(function(k){
+      var el=document.getElementById('sb-val-'+k);
+      if(el) el.textContent=sm[k];
+    });
+    updateSupFilter();
+  }catch(err){
+    // 統計更新失敗不影響主要功能
+    console.error('updateStats error:', err);
+  }
 }
 function updateSupFilter(){
   const sel=document.getElementById('filter-sup');if(!sel)return;
@@ -3058,25 +3134,46 @@ function showTable(key){
 }
 function toggleSidebar(){document.getElementById('sidebar').classList.toggle('collapsed');}
 function filterByCard(key){
-  document.querySelectorAll('.sidebar-item').forEach(function(el){el.classList.remove('active');});
-  const sEl=document.getElementById('sidebar-'+key);if(sEl)sEl.classList.add('active');
-  document.querySelectorAll('.stat-card').forEach(function(el){el.classList.remove('active');});
-  const cEl=document.getElementById('card-'+key);if(cEl)cEl.classList.add('active');
-  const replyEl=document.getElementById('filter-reply'),ovEl=document.getElementById('filter-overdue');
-  replyEl.value='';ovEl.value='';
-  if(key==='pending')replyEl.value='__empty';
-  else if(key==='overdue')ovEl.value='1';
-  else if(key==='trans')replyEl.value='轉不良';
-  else if(key==='ret')replyEl.value='不良退';
-  else if(key==='swap')replyEl.value='不良換';
-  else if(key==='expiry'){
-    // 效期品篩選：直接用搜尋欄不夠，改用全域變數控制
-    window._filterExpiry=true;
-  } else {
-    window._filterExpiry=false;
+  try{
+    // ── 更新側邊欄與卡片的 active 狀態 ──
+    document.querySelectorAll('.sidebar-item').forEach(function(el){el.classList.remove('active');});
+    const sEl=document.getElementById('sidebar-'+key);if(sEl)sEl.classList.add('active');
+    document.querySelectorAll('.stat-card').forEach(function(el){el.classList.remove('active');});
+    const cEl=document.getElementById('card-'+key);if(cEl)cEl.classList.add('active');
+
+    // ── 重設所有篩選條件 ──
+    const replyEl=document.getElementById('filter-reply');
+    const ovEl=document.getElementById('filter-overdue');
+    replyEl.value=''; ovEl.value='';
+
+    // ── 重設全域篩選旗標 ──
+    window._filterExpiry   = false; // 效期品篩選旗標
+    window._filterNotified = false; // 已發信通知篩選旗標
+
+    // ── 依 key 設定對應篩選條件 ──
+    if(key==='pending'){
+      replyEl.value='__empty';   // 未填商流回覆
+    } else if(key==='overdue'){
+      ovEl.value='1';            // 逾期品項
+    } else if(key==='trans'){
+      replyEl.value='轉不良';
+    } else if(key==='ret'){
+      replyEl.value='不良退';
+    } else if(key==='swap'){
+      replyEl.value='不良換';
+    } else if(key==='expiry'){
+      // 效期品：用全域旗標控制，讓 renderTable 篩選
+      window._filterExpiry=true;
+    } else if(key==='notified'){
+      // 已發信通知廠商：notifyDate 有值的品項
+      window._filterNotified=true;
+    }
+    // key==='all' 或其他：不設篩選，顯示全部
+
+    renderTable();
+  }catch(err){
+    console.error('filterByCard error:', err);
   }
-  if(key!=='expiry') window._filterExpiry=false;
-  renderTable();
 }
 
 // ── 批次 ──
