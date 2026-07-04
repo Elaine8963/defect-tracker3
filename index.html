@@ -262,7 +262,7 @@ body{font-family:'Helvetica Neue','PingFang TC','Microsoft JhengHei',sans-serif;
 .badge-cat-intl{background:#e0f2fe;color:#0c4a6e;border:1px solid #7dd3fc;}
 table{width:100%;border-collapse:collapse;}
 thead tr{background:var(--surface2);position:sticky;top:0;z-index:10;}
-th{padding:11px 12px;text-align:left;font-size:11px;font-weight:700;color:var(--text2);white-space:nowrap;letter-spacing:.4px;text-transform:uppercase;background:var(--surface2);box-shadow:0 1px 0 var(--border);}
+th{padding:11px 12px;text-align:left;font-size:12px;font-weight:700;color:var(--text2);white-space:nowrap;letter-spacing:.3px;text-transform:uppercase;background:var(--surface2);box-shadow:0 1px 0 var(--border);}
 /* 可排序欄位 */
 th.sortable{cursor:pointer;user-select:none;}
 th.sortable:hover{background:#e8e7e0;color:var(--text);}
@@ -272,15 +272,15 @@ th.sort-none::after{content:' ⇅';font-size:9px;color:var(--text3);}
 /* 沿用上筆按鈕 */
 .copy-last-btn{display:flex;align-items:center;justify-content:center;gap:6px;padding:8px 14px;border-radius:var(--r);border:1.5px dashed var(--border2);background:var(--surface2);color:var(--text2);font-size:12px;font-weight:600;cursor:pointer;transition:all .15s;width:100%;margin-bottom:14px;}
 .copy-last-btn:hover{border-color:var(--teal);background:var(--teal-bg);color:var(--teal);}
-td{padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:12px;}
+td{padding:10px 12px;border-bottom:1px solid var(--border);vertical-align:middle;font-size:13px;}
 tr:last-child td{border-bottom:none;}
 tbody tr:hover td{background:#fafaf6;}
 tbody tr.overdue-warn td{background:#fffbeb;}
 tbody tr.overdue-warn:hover td{background:#fef3c7;}
 tbody tr.overdue-crit td{background:#fff5f5;}
 tbody tr.overdue-crit:hover td{background:#fee8e8;}
-.row-num{color:var(--text3);font-size:11px;font-weight:600;}
-.mono{font-family:'SF Mono','Fira Code',monospace;font-size:11px;}
+.row-num{color:var(--text3);font-size:13px;font-weight:700;}
+.mono{font-family:'SF Mono','Fira Code',monospace;font-size:12px;}
 .cell-clip{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .badge{display:inline-flex;align-items:center;padding:3px 8px;border-radius:20px;font-size:11px;font-weight:600;white-space:nowrap;}
 .badge-blue{background:var(--blue-bg);color:var(--blue);}
@@ -3170,21 +3170,21 @@ function renderTable(){
       '<td class="td-check"><input type="checkbox" class="row-check" data-idx="'+ri+'" onchange="onRowCheck(this)"></td>'+
       '<td class="row-num">'+r.sn+'</td>'+
       '<td class="mono">'+r.sup+'</td>'+
-      '<td style="font-size:12px">'+snHtml+'</td>'+
+      '<td style="font-size:13px">'+snHtml+'</td>'+
       '<td class="mono">'+r.loc+'</td>'+
       '<td>'+catBadge(r.cat)+'</td>'+
       '<td class="mono">'+r.sku+'</td>'+
       '<td class="cell-clip" style="max-width:200px" title="'+r.name+'">'+r.name+'</td>'+
-      '<td style="text-align:right;font-weight:600;'+(r.qty<0?'color:var(--coral)':'')+'">'+r.qty+'</td>'+
+      '<td style="text-align:right;font-size:14px;font-weight:700;'+(r.qty<0?'color:var(--coral)':'')+'">'+r.qty+'</td>'+
       expiryCell(r)+
       '<td>'+replyBadge(r.reply)+'</td>'+
-      '<td class="cell-clip" style="max-width:110px;color:var(--text2)">'+(r.reason||'—')+'</td>'+
-      '<td style="white-space:nowrap;font-size:12px">'+dateHtml+'</td>'+
-      '<td style="font-size:11px;color:var(--text2)">'+(r.notifyDate||'—')+'</td>'+
-      '<td style="white-space:nowrap;font-size:12px">'+retHtml+'</td>'+
-      '<td class="cell-clip" style="max-width:130px;color:var(--text2)">'+(r.note||'—')+'</td>'+
-      '<td style="font-size:12px">'+(r.handler||'—')+'</td>'+
-      '<td style="font-size:11px;color:var(--text3)">'+(r.updatedAt||'—')+'</td>'+
+      '<td class="cell-clip" style="max-width:110px;font-size:13px;color:var(--text2)">'+(r.reason||'—')+'</td>'+
+      '<td style="white-space:nowrap;font-size:13px">'+dateHtml+'</td>'+
+      '<td style="font-size:13px;color:var(--text2)">'+(r.notifyDate||'—')+'</td>'+
+      '<td style="white-space:nowrap;font-size:13px">'+retHtml+'</td>'+
+      '<td class="cell-clip" style="max-width:130px;font-size:13px;color:var(--text2)">'+(r.note||'—')+'</td>'+
+      '<td style="font-size:13px">'+(r.handler||'—')+'</td>'+
+      '<td style="font-size:12px;color:var(--text3)">'+(r.updatedAt||'—')+'</td>'+
       '<td style="position:sticky;right:0;background:var(--surface);box-shadow:-2px 0 4px rgba(0,0,0,.06)"><button class="btn btn-sm" onclick="openEdit('+ri+')">編輯</button></td>'+
       '</tr>';
   }).join('');
