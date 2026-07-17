@@ -1808,7 +1808,7 @@ function renderMobileReturnCards(rows){
   if(!container) return;
   if(rows.length===0){ container.innerHTML=''; return; }
 
-  function typeBadge(v){
+  function typeBadgeMobile(v){
     if(!v) return '—';
     const cls = v==='不良退'?'badge-coral':v==='不良換'?'badge-teal':'badge-blue';
     return '<span class="badge '+cls+'">'+v+'</span>';
@@ -1821,7 +1821,7 @@ function renderMobileReturnCards(rows){
           <div class="m-return-card-row">🏢 ${r.supplierName||'—'} &nbsp;·&nbsp; 數量 <strong>${r.qty}</strong></div>
           ${r.returnNo?'<div class="m-return-card-row" style="margin-top:2px">📋 '+r.returnNo+'</div>':''}
           <div class="m-return-card-row" style="margin-top:4px;display:flex;align-items:center;gap:6px">
-            ${typeBadge(r.returnType)}
+            ${typeBadgeMobile(r.returnType)}
             ${r.returnDate?'<span style="font-size:11px;color:var(--text3)">🗓 '+r.returnDate+'</span>':''}
           </div>
         </div>
@@ -2040,7 +2040,7 @@ function renderReturnTable(){
   }
   document.getElementById('return-empty').style.display='none';
   document.getElementById('return-table').style.display='';
-  function typeBadge(v){
+  function typeBadgeTable(v){
     if(v==='不良退')return '<span class="return-badge rb-direct">不良退</span>';
     if(v==='不良換')return '<span class="return-badge rb-exchange">不良換</span>';
     if(v==='轉不良')return '<span class="return-badge rb-convert">轉不良</span>';
@@ -2054,7 +2054,7 @@ function renderReturnTable(){
       <td class="mono">${r.sku||'—'}</td>
       <td class="cell-clip" style="max-width:200px" title="${r.name}">${r.name||'—'}</td>
       <td style="text-align:right;font-weight:600">${r.qty}</td>
-      <td>${typeBadge(r.returnType)}</td>
+      <td>${typeBadgeTable(r.returnType)}</td>
       <td style="font-size:12px">${r.returnDate||'—'}</td>
       <td class="cell-clip" style="max-width:130px;color:var(--text2)">${r.note||'—'}</td>
       <td style="font-size:12px">${r.handler||'—'}</td>
@@ -3380,6 +3380,14 @@ async function saveEdit(){
     return;
   }
 
+  // ── 保存修改前的欄位快照，供 API 失敗時 rollback（ADR-001 Principle 4）──
+  const snapshot = {
+    reply: r.reply, loc: r.loc, reason: r.reason, date: r.date,
+    returnDate: r.returnDate, notifyDate: r.notifyDate, note: r.note,
+    handler: r.handler, isExpiry: r.isExpiry, expiryDate: r.expiryDate,
+    updatedAt: r.updatedAt, supplierName: r.supplierName
+  };
+
   // ── 讀取表單值 ──
   r.reply      = document.getElementById('m-reply').value;
   r.loc        = document.getElementById('m-loc').value.trim()||r.loc;
@@ -3406,15 +3414,18 @@ async function saveEdit(){
     r.supplierName = r.supplierName || '';
   }
 
-  closeModal(); renderTable(); updateStats();
+  closeModal();
   try{
     await saveRecord(r);
     setSyncStatus('ok','✓ 已同步');
     showToast('✓ 已儲存');
   }catch(e){
+    // ── API 失敗，rollback 回修改前的欄位值（ADR-001 Principle 6：Commit 以 API 結果為準）──
+    Object.assign(r, snapshot);
     setSyncStatus('err','✗ 同步失敗');
     showToast('⚠ 儲存失敗：'+e.message, 4000);
   }
+  renderTable(); updateStats();
 }
 document.getElementById('edit-modal').addEventListener('click',function(e){if(e.target===document.getElementById('edit-modal'))closeModal();});
 function handleRowClick(event,idx){if(event.target.type==='checkbox'||event.target.tagName==='BUTTON'||event.target.closest('button'))return;openEdit(idx);}
