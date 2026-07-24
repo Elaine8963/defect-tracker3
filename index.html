@@ -2675,7 +2675,7 @@ async function saveSupplierName(sup, supName){
       }
     }
 
-    // ── 4. 背景寫入 Supabase（UPSERT：有就更新，沒有就新增）──
+    // ── 4. 背景寫入 Supabase suppliers 主檔（UPSERT：有就更新，沒有就新增）──
     // 需搭配 Prefer: resolution=merge-duplicates，on_conflict 才會真正生效，
     // 否則 PostgREST 會當成一般 INSERT，遇到已存在的 sup_code 就會撞主鍵失敗
     await sbFetch('POST',
@@ -2688,6 +2688,13 @@ async function saveSupplierName(sup, supName){
       },
       'resolution=merge-duplicates'
     );
+
+    // ── 5. 持久化擴散：因為每筆追蹤記錄各自存了一份 supplier_name
+    // 副本（非即時查詢主檔），第2步的記憶體更新只在目前瀏覽器分頁
+    // 有效、重新整理即消失。這裡用供應商代號篩選，一次把資料庫中
+    // 所有相符的記錄（跨倉別，因為供應商名稱不分倉別）都改成新名稱，
+    // 讓修正真正生效，而不是只有畫面上的錯覺。──
+    await sbFetch('PATCH', TABLE+'?sup=eq.'+encodeURIComponent(key), { supplier_name: name });
 
     console.log(`✅ 供應商名稱已記憶並同步：${key} → ${name}（共更新 ${updated} 筆）`);
 
