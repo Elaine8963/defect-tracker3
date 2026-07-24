@@ -2426,14 +2426,16 @@ const SB_URL = 'https://jspvovdhfcwarkumvkpl.supabase.co';
 const SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpzcHZvdmRoZmN3YXJrdW12a3BsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0NjU1NTIsImV4cCI6MjA5NjA0MTU1Mn0.VQq_yhvr2hbIwVx7agMeAEeILhRO_2WgYsrfZWpAHDA';
 const TABLE = 'defect_records';
 
-async function sbFetch(method, path, body) {
+async function sbFetch(method, path, body, preferExtra) {
+  let prefer = method === 'POST' ? 'return=representation' : 'return=minimal';
+  if(preferExtra) prefer = preferExtra + ',' + prefer;
   const res = await fetch(SB_URL + '/rest/v1/' + path, {
     method: method,
     headers: {
       'apikey': SB_KEY,
       'Authorization': 'Bearer ' + SB_KEY,
       'Content-Type': 'application/json',
-      'Prefer': method === 'POST' ? 'return=representation' : 'return=minimal'
+      'Prefer': prefer
     },
     body: body ? JSON.stringify(body) : undefined
   });
@@ -2668,6 +2670,8 @@ async function saveSupplierName(sup, supName){
     }
 
     // ── 4. 背景寫入 Supabase（UPSERT：有就更新，沒有就新增）──
+    // 需搭配 Prefer: resolution=merge-duplicates，on_conflict 才會真正生效，
+    // 否則 PostgREST 會當成一般 INSERT，遇到已存在的 sup_code 就會撞主鍵失敗
     await sbFetch('POST',
       'suppliers?on_conflict=sup_code',
       {
@@ -2675,7 +2679,8 @@ async function saveSupplierName(sup, supName){
         sup_name:   name,
         updated_at: todayStr(),
         updated_by: currentUser ? currentUser.id : ''
-      }
+      },
+      'resolution=merge-duplicates'
     );
 
     console.log(`✅ 供應商名稱已記憶並同步：${key} → ${name}（共更新 ${updated} 筆）`);
@@ -2931,6 +2936,48 @@ async function saveRecord(r){
   const body=recordToDb(r,currentUser.whKey);
   if(r.id){await sbFetch('PATCH',TABLE+'?id=eq.'+r.id,body);}
   else{const res=await sbFetch('POST',TABLE,body);if(res&&res[0])r.id=res[0].id;}
+}
+
+// ══════════════════════════════════════
+// ADR-006：Record Update Coordinator
+// Ticket 3A — 純協調邏輯落地，尚未接線（saveEdit / applyBatch
+// 皆尚未呼叫此函式，目前無任何呼叫點，對正式系統零影響）
+//
+// 責任邊界：
+// - 只負責單筆資料的安全提交（snapshot → apply → saveRecord
+//   → 成功 Commit / 失敗 Rollback）
+// - 不推論呼叫端意圖（Sparse Change Principle）：changes 的
+//   存在即代表明確要求修改該欄位，全數套用，不篩選
+// - 不修改 changes 物件本身（Changes Immutability）
+// - Strong Exception Safety：套用與持久化過程中任何例外，
+//   都會觸發 rollback，record 恢復為呼叫前狀態
+// - Snapshot Scope：快照範圍僅涵蓋 changes 涉及的欄位
+// - 不修改 records、selectedIdx、DOM、Modal、Toast 等任何
+//   全域狀態或 UI，不呼叫 saveRecord 以外的持久化邏輯
+//
+// 後續 Ticket 3B（真實 saveRecord 整合驗證）、3C（saveEdit
+// 接線）、3D（applyBatch 接線）將在此基礎上逐步進行。
+// ══════════════════════════════════════
+async function commitRecordChanges(record, changes){
+  const snapshot = {};
+  Object.keys(changes).forEach(function(k){
+    snapshot[k] = record[k];
+  });
+
+  try{
+    Object.keys(changes).forEach(function(k){
+      record[k] = changes[k];
+    });
+
+    await saveRecord(record);
+
+    return { success: true, record: record, error: null };
+  }catch(err){
+    Object.keys(snapshot).forEach(function(k){
+      record[k] = snapshot[k];
+    });
+    return { success: false, record: record, error: err };
+  }
 }
 
 // ── 同步策略（ADR-002：Diff-based Sync，取代原 Replace-all）──
