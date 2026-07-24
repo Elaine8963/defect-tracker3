@@ -2479,7 +2479,13 @@ function recordToDb(r, wh){
 // 本函式不呼叫 sbFetch、不修改 records、不寫入 localStorage、
 // 不操作 UI、不產生全域狀態。同一組輸入永遠得到相同輸出。
 // ══════════════════════════════════════
-const SYNC_FIELDS = ['sn', 'sup', 'cat', 'name', 'qty', 'supplierName'];
+// 注意：supplierName 不在此列——它並非 Excel 直接解析出的欄位
+// （Excel 只有供應商「代號」，沒有「名稱」欄位），而是由供應商主檔
+// 系統（getSupplierName/saveSupplierName/_supplierCache/Supabase
+// suppliers 資料表）擁有的衍生資料。若列入 SYNC_FIELDS，會導致
+// Excel 匯入時查到的（可能過時的）名稱覆蓋掉使用者手動維護、
+// 已存入 suppliers 資料表的正確名稱。
+const SYNC_FIELDS = ['sn', 'sup', 'cat', 'name', 'qty'];
 
 // ADR-004 的具體實作工具：統一計算方式，避免各處各自組 sku+'_'+loc 字串
 // 純函式：回傳新物件，不修改輸入的 r
