@@ -226,6 +226,20 @@ body{font-family:'Helvetica Neue','PingFang TC','Microsoft JhengHei',sans-serif;
 .card-swap{border-left:4px solid var(--teal);}.card-swap .stat-card-val{color:var(--teal);}
 /* 已發信通知廠商：橘色系，代表已通知等待廠商回應 */
 .card-notified{border-left:4px solid #f97316;}.card-notified .stat-card-val{color:#ea580c;}
+/* 供應商合併確認視窗 */
+.supmerge-card{border-radius:var(--r);padding:12px 14px;margin-bottom:10px;}
+.supmerge-card.confidence-high{border:1px solid #93c5fd;background:#eff6ff;}
+.supmerge-card.confidence-low{border:1px solid var(--border);background:var(--surface);}
+.supmerge-card-title{font-size:14px;font-weight:600;margin:0 0 2px;}
+.supmerge-card.confidence-high .supmerge-card-title{color:#1d4ed8;}
+.supmerge-card-sub{font-size:12px;color:var(--text3);margin:0 0 8px;}
+.supmerge-item-list{background:var(--surface2);border-radius:var(--r);overflow:hidden;margin-top:8px;}
+.supmerge-item-row{padding:6px 10px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border);font-size:12px;}
+.supmerge-item-row:last-child{border-bottom:none;}
+.supmerge-item-row.notified{opacity:.55;}
+.supmerge-item-sup{color:var(--text3);width:60px;flex-shrink:0;}
+.supmerge-item-name{flex:1;}
+.supmerge-notified-badge{font-size:11px;background:#ffedd5;color:#ea580c;border-radius:var(--r);padding:1px 7px;white-space:nowrap;}
 #table-view{display:none;flex-direction:row;width:100%;height:calc(100vh - var(--header-h));}
 #sidebar{width:220px;flex-shrink:0;background:var(--surface);border-right:1px solid var(--border);padding:12px 0;display:none;flex-direction:column;gap:2px;overflow-y:auto;transition:width .2s;}
 #sidebar.collapsed{width:52px;}
@@ -887,11 +901,11 @@ input[type=checkbox]{width:15px;height:15px;cursor:pointer;accent-color:#1a1917;
       </div>
       <!-- 供應商分組列表（動態產生） -->
       <div id="return-notice-groups" style="max-height:420px;overflow-y:auto"></div>
-      <!-- 無不良退資料時的提示 -->
+      <!-- 無待處理不良退資料時的提示（會依情況顯示不同文字，見 openReturnNoticeModal） -->
       <div id="return-notice-empty" style="display:none;text-align:center;padding:32px;color:var(--text3)">
         <div style="font-size:36px;margin-bottom:12px">📭</div>
-        <div style="font-size:14px;font-weight:600;color:var(--text2)">目前沒有「不良退」的品項</div>
-        <div style="font-size:12px;margin-top:6px">請先將商流回覆設定為「不良退」</div>
+        <div style="font-size:14px;font-weight:600;color:var(--text2)" id="return-notice-empty-title">目前沒有「不良退」的品項</div>
+        <div style="font-size:12px;margin-top:6px" id="return-notice-empty-sub">請先將商流回覆設定為「不良退」</div>
       </div>
     </div>
     <div class="modal-footer" style="justify-content:space-between;align-items:center">
@@ -907,9 +921,38 @@ input[type=checkbox]{width:15px;height:15px;cursor:pointer;accent-color:#1a1917;
 </div>
 
 <!-- ═══════════════════════════════════════
+     供應商代號合併確認視窗（Step 2，尚未接線至 openReturnNoticeModal）
+════════════════════════════════════════ -->
+<div class="modal-overlay" id="supplier-merge-modal">
+  <div class="modal" style="width:600px;max-width:96vw">
+    <div class="modal-header">
+      <div class="modal-title">
+        <div class="modal-title-icon">🔗</div>
+        偵測到可能重複的供應商
+      </div>
+      <button class="modal-close" onclick="closeSupplierMergeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:12px;color:var(--text3);margin-bottom:14px">
+        名稱相同或高度相似的代號，勾選要合併成同一份通知單。已發信通知過的品項不會計入本次通知單。
+      </div>
+      <div id="supplier-merge-groups" style="max-height:440px;overflow-y:auto"></div>
+      <div style="font-size:11px;color:var(--text3);margin-top:10px">未勾選的組合，將維持各自分開產生通知單</div>
+    </div>
+    <div class="modal-footer" style="justify-content:flex-end">
+      <div style="display:flex;gap:8px">
+        <button class="btn" onclick="closeSupplierMergeModal()">取消</button>
+        <button class="btn btn-dark" onclick="confirmSupplierMergeSelections()">確認並繼續</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════
      消失品項處理視窗
 ════════════════════════════════════════ -->
 <div class="modal-overlay" id="missing-items-modal">
+
   <div class="modal" style="width:640px;max-width:96vw">
     <div class="modal-header">
       <div class="modal-title">
@@ -1305,34 +1348,262 @@ input[type=checkbox]{width:15px;height:15px;cursor:pointer;accent-color:#1a1917;
 //   5. 同步將「發信通知廠商日期」填入今天
 // ══════════════════════════════════════════════════
 
+// ── 供應商代號重複判定（純函式，尚未接線）──
+// 不呼叫 sbFetch、不修改輸入的 groups、不碰任何 UI
+// 用途：偵測「代號不同、但可能是同一家供應商」的分組，供退貨通知單
+// 合併判定使用。目前僅為獨立函式，openReturnNoticeModal 尚未呼叫它。
+
+// 常見公司體制字樣，由長到短排列（避免短字樣先比對造成殘留）
+const COMPANY_SUFFIXES = ['股份有限公司', '有限公司', '企業社', '商行', '工作室'];
+
+function normalizeSupplierName(name) {
+  let s = String(name || '').trim();
+  COMPANY_SUFFIXES.forEach(function (suffix) {
+    s = s.split(suffix).join('');
+  });
+  s = s.replace(/\s+/g, ''); // 去除所有空白
+  return s;
+}
+
+// 簡易 Union-Find，用來把「有關聯的分組」聚合成同一叢集
+function createUnionFind(n) {
+  const parent = Array.from({ length: n }, function (_, i) { return i; });
+  function find(x) {
+    while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+    return x;
+  }
+  function union(a, b) {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  }
+  return { find: find, union: union };
+}
+
+function detectSupplierDuplicates(groups) {
+  const n = groups.length;
+  const normalized = groups.map(function (g) { return normalizeSupplierName(g.name); });
+  const uf = createUnionFind(n);
+
+  // ── 第一輪：正規化後完全相同 → 一定合併（高信心度的基礎）──
+  const byNormalized = {};
+  normalized.forEach(function (norm, i) {
+    if (!norm) return; // 空字串不參與比對，避免全部空名稱互相誤判
+    if (!byNormalized[norm]) byNormalized[norm] = [];
+    byNormalized[norm].push(i);
+  });
+  Object.keys(byNormalized).forEach(function (norm) {
+    const idxs = byNormalized[norm];
+    for (let k = 1; k < idxs.length; k++) uf.union(idxs[0], idxs[k]);
+  });
+
+  // ── 第二輪：不同正規化字串之間，若一方是另一方的開頭片段 → 合併（低信心度）──
+  const distinctNorms = Object.keys(byNormalized);
+  for (let a = 0; a < distinctNorms.length; a++) {
+    for (let b = a + 1; b < distinctNorms.length; b++) {
+      const na = distinctNorms[a], nb = distinctNorms[b];
+      if (na.length === 0 || nb.length === 0) continue;
+      if (na.startsWith(nb) || nb.startsWith(na)) {
+        uf.union(byNormalized[na][0], byNormalized[nb][0]);
+      }
+    }
+  }
+
+  // ── 彙整最終叢集 ──
+  const clusters = {};
+  for (let i = 0; i < n; i++) {
+    const root = uf.find(i);
+    if (!clusters[root]) clusters[root] = [];
+    clusters[root].push(i);
+  }
+
+  const suggestions = [];
+  const unmatchedGroups = [];
+
+  Object.keys(clusters).forEach(function (root) {
+    const idxs = clusters[root];
+    if (idxs.length < 2) {
+      unmatchedGroups.push(groups[idxs[0]]);
+      return;
+    }
+    const memberNorms = idxs.map(function (i) { return normalized[i]; });
+    const allSameNorm = memberNorms.every(function (m) { return m === memberNorms[0]; });
+
+    let displayName;
+    if (allSameNorm) {
+      // 高信心度：直接用其中一筆完整原始名稱（挑最長的，通常最完整）
+      const rawNames = idxs.map(function (i) { return groups[i].name; });
+      displayName = rawNames.reduce(function (a, b) { return b.length > a.length ? b : a; });
+    } else {
+      // 低信心度：列出所有出現過的不同原始寫法
+      const uniqueRaw = Array.from(new Set(idxs.map(function (i) { return groups[i].name; })));
+      displayName = uniqueRaw.join('　／　');
+    }
+
+    suggestions.push({
+      confidence: allSameNorm ? 'high' : 'low',
+      groups: idxs.map(function (i) { return groups[i]; }),
+      displayName: displayName
+    });
+  });
+
+  return { suggestions: suggestions, unmatchedGroups: unmatchedGroups };
+}
+
+// ── 供應商合併確認視窗（獨立模組，尚未接線到 openReturnNoticeModal）──
+// 用法（可於 Console 手動測試）：
+//   openSupplierMergeModal(groups, function(mergedGroups){ console.log(mergedGroups); })
+// 若 detectSupplierDuplicates 沒有任何建議，會直接呼叫 onConfirm(groups)，
+// 不會跳出視窗（維持「沒有重複時操作流程完全不變」的原則）
+let _supplierMergeState = null; // 暫存這次視窗的 suggestions / unmatchedGroups / onConfirm callback
+
+function openSupplierMergeModal(groups, onConfirm){
+  const detectResult = detectSupplierDuplicates(groups);
+
+  if(detectResult.suggestions.length === 0){
+    onConfirm(groups); // 沒有偵測到重複，直接沿用原本分組，不打斷流程
+    return;
+  }
+
+  _supplierMergeState = {
+    suggestions: detectResult.suggestions,
+    unmatchedGroups: detectResult.unmatchedGroups,
+    onConfirm: onConfirm
+  };
+
+  const container = document.getElementById('supplier-merge-groups');
+  container.innerHTML = detectResult.suggestions.map(function(sugg, idx){
+    const confClass = sugg.confidence === 'high' ? 'confidence-high' : 'confidence-low';
+    const titleText = sugg.confidence === 'high'
+      ? sugg.displayName
+      : '品名可能不完全一致，請確認';
+    const subText = sugg.confidence === 'high' ? '' :
+      `<div class="supmerge-card-sub">${sugg.displayName}</div>`;
+    const checkedAttr = sugg.confidence === 'high' ? 'checked' : '';
+
+    const itemRows = sugg.groups.map(function(g){
+      return g.items.map(function(r){
+        const notified = !!r.notifyDate;
+        const badge = notified ? `<span class="supmerge-notified-badge">已發信 ${r.notifyDate}</span>` : '';
+        return `<div class="supmerge-item-row${notified?' notified':''}">
+          <span class="supmerge-item-sup">${g.sup}</span>
+          <span class="supmerge-item-name">${r.sku||''}　${r.name||''}</span>
+          ${notified ? badge : `<span style="color:var(--text3)">${r.qty}件</span>`}
+        </div>`;
+      }).join('');
+    }).join('');
+
+    return `
+    <div class="supmerge-card ${confClass}">
+      <label style="display:flex;align-items:flex-start;gap:10px;cursor:pointer">
+        <input type="checkbox" data-sugg-idx="${idx}" class="supmerge-checkbox" ${checkedAttr}
+          style="margin-top:3px;width:15px;height:15px;flex-shrink:0">
+        <div style="flex:1">
+          <div class="supmerge-card-title">${titleText}</div>
+          ${subText}
+        </div>
+      </label>
+      <div class="supmerge-item-list">${itemRows}</div>
+    </div>`;
+  }).join('');
+
+  document.getElementById('supplier-merge-modal').classList.add('open');
+}
+
+function closeSupplierMergeModal(){
+  document.getElementById('supplier-merge-modal').classList.remove('open');
+  _supplierMergeState = null;
+}
+
+function confirmSupplierMergeSelections(){
+  if(!_supplierMergeState) return;
+
+  const finalGroups = [];
+  const checkboxes = document.querySelectorAll('.supmerge-checkbox');
+
+  checkboxes.forEach(function(cb){
+    const idx = Number(cb.getAttribute('data-sugg-idx'));
+    const sugg = _supplierMergeState.suggestions[idx];
+    if(cb.checked){
+      // 使用者確認合併：組成單一分組，代號用 + 串接
+      // 已發信品項已在 openReturnNoticeModal 端排除，這裡不需再過濾一次
+      const mergedSup = sugg.groups.map(function(g){ return g.sup; }).join('+');
+      const mergedItems = [];
+      sugg.groups.forEach(function(g){
+        g.items.forEach(function(r){ mergedItems.push(r); });
+      });
+      finalGroups.push({ sup: mergedSup, name: sugg.displayName, items: mergedItems });
+    }else{
+      // 使用者取消合併：維持各代號原樣分開
+      sugg.groups.forEach(function(g){ finalGroups.push(g); });
+    }
+  });
+
+  // 沒有被偵測到重複的分組，原樣加入
+  _supplierMergeState.unmatchedGroups.forEach(function(g){ finalGroups.push(g); });
+
+  const onConfirm = _supplierMergeState.onConfirm;
+  closeSupplierMergeModal();
+  onConfirm(finalGroups);
+}
+
+
 // ── 開啟退貨通知單 Modal ──
 function openReturnNoticeModal(){
   try{
-    // 取得所有「不良退」的品項
-    const retItems = records.filter(r => r.reply === '不良退');
+    // 取得所有「不良退」且尚未發信通知過的品項
+    // （notifyDate 有值代表已產生過通知單，不應再次列入，避免重複通知廠商）
+    const allBadReturnItems = records.filter(r => r.reply === '不良退');
+    const retItems = allBadReturnItems.filter(r => !r.notifyDate);
 
     const groupsEl = document.getElementById('return-notice-groups');
     const emptyEl  = document.getElementById('return-notice-empty');
 
     if(retItems.length === 0){
-      // 無不良退資料：顯示空狀態
+      // 無待處理不良退資料：顯示空狀態，區分兩種情況給予不同提示
       groupsEl.style.display = 'none';
       emptyEl.style.display  = '';
-    } else {
-      groupsEl.style.display = '';
-      emptyEl.style.display  = 'none';
-      // 依供應商代號分組
-      renderReturnNoticeGroups(retItems);
+      const titleEl = document.getElementById('return-notice-empty-title');
+      const subEl   = document.getElementById('return-notice-empty-sub');
+      if(allBadReturnItems.length > 0){
+        titleEl.textContent = '不良退品項皆已發信通知過廠商';
+        subEl.textContent   = `共 ${allBadReturnItems.length} 筆，皆已產生過退貨通知單，無需重複發送`;
+      }else{
+        titleEl.textContent = '目前沒有「不良退」的品項';
+        subEl.textContent   = '請先將商流回覆設定為「不良退」';
+      }
+      updateReturnNoticeBtn();
+      document.getElementById('return-notice-modal').classList.add('open');
+      return;
     }
 
-    // 重設產生按鈕狀態
-    updateReturnNoticeBtn();
-    document.getElementById('return-notice-modal').classList.add('open');
+    groupsEl.style.display = '';
+    emptyEl.style.display  = 'none';
+
+    // 依供應商代號分組，先讓合併判定介入；若沒有偵測到可能重複的
+    // 代號，openSupplierMergeModal 會同步直接呼叫 callback，不會
+    // 跳出視窗，操作體感跟修改前完全一樣（不會多一個等待步驟）
+    const groups = groupBySupplier(retItems);
+    openSupplierMergeModal(groups, function(finalGroups){
+      renderReturnNoticeGroups(finalGroups);
+      updateReturnNoticeBtn();
+      document.getElementById('return-notice-modal').classList.add('open');
+    });
 
   } catch(err){
     console.error('openReturnNoticeModal error:', err);
     showToast('⚠ 開啟退貨通知單失敗：' + err.message, 4000);
   }
+}
+
+// ── 依供應商代號分組（純函式，抽出來讓 openReturnNoticeModal 與
+// 合併判定共用同一套分組邏輯，避免兩處各自實作、日後不一致）──
+function groupBySupplier(retItems){
+  const supMap = {};
+  retItems.forEach(r => {
+    if(!supMap[r.sup]) supMap[r.sup] = {sup: r.sup, name: r.supplierName||r.sup, items: []};
+    supMap[r.sup].items.push(r);
+  });
+  return Object.values(supMap);
 }
 
 // ── 關閉 Modal ──
@@ -1341,17 +1612,10 @@ function closeReturnNoticeModal(){
 }
 
 // ── 依供應商分組並渲染勾選清單 ──
-function renderReturnNoticeGroups(retItems){
+function renderReturnNoticeGroups(groups){
   try{
-    // 建立供應商分組 Map：key = 供應商代號
-    const supMap = {};
-    retItems.forEach(r => {
-      if(!supMap[r.sup]) supMap[r.sup] = {sup: r.sup, name: r.supplierName||r.sup, items: []};
-      supMap[r.sup].items.push(r);
-    });
-
     const groupsEl = document.getElementById('return-notice-groups');
-    groupsEl.innerHTML = Object.values(supMap).map(group => {
+    groupsEl.innerHTML = groups.map(group => {
       const supKey = group.sup.replace(/[^a-zA-Z0-9]/g,'_'); // 安全的 DOM id key
 
       return `
@@ -2706,6 +2970,58 @@ async function saveSupplierName(sup, supName){
     // 儲存失敗不影響主流程，僅記錄錯誤
     console.error('saveSupplierName error:', err);
   }
+}
+
+// ══════════════════════════════════════
+// 一次性維護工具：批次補齊供應商名稱歷史空白
+//
+// 背景：saveSupplierName() 在正常編輯情境下運作正確，但它有
+// 「快取已經等於目標名稱就直接跳過」的判斷——這個判斷對「使用者
+// 正在編輯」的情境是對的（沒改就不用存），但對「批次補齊」的
+// 情境反而會擋住動作，因為批次補齊的目標名稱，本來就是從快取
+// 拿出來的，一定會等於快取。因此另外寫這個獨立函式，不重用、
+// 不修改 saveSupplierName()，避免兩種情境互相干擾。
+//
+// 用法：登入後於瀏覽器 Console 執行 backfillSupplierNames()
+// 建議在岡山倉、大肚倉帳號都各跑一次，涵蓋兩邊已載入的資料。
+// ══════════════════════════════════════
+async function backfillSupplierNames(){
+  const toFix = {}; // { 供應商代號: 正確名稱 }，用物件天然去重複
+  records.forEach(function(r){
+    if((!r.supplierName || r.supplierName==='') && r.sup && _supplierCache[r.sup]){
+      toFix[r.sup] = _supplierCache[r.sup];
+    }
+  });
+
+  const codes = Object.keys(toFix);
+  if(codes.length === 0){
+    console.log('沒有發現需要補齊的供應商代號');
+    return { fixedCodes: [], fixedRecordCount: 0 };
+  }
+
+  console.log(`發現 ${codes.length} 個供應商代號需要補齊：`, codes);
+
+  let fixedRecordCount = 0;
+  for(const code of codes){
+    const name = toFix[code];
+    try{
+      await sbFetch('PATCH', TABLE+'?sup=eq.'+encodeURIComponent(code), { supplier_name: name });
+      records.forEach(function(r){
+        if(r.sup === code && (!r.supplierName || r.supplierName==='')){
+          r.supplierName = name;
+          fixedRecordCount++;
+        }
+      });
+      console.log(`  ✓ ${code} → ${name}`);
+    }catch(err){
+      console.error(`  ✗ ${code} 補齊失敗：`, err);
+    }
+  }
+
+  renderTable();
+  updateStats();
+  console.log(`完成：共補齊 ${codes.length} 個供應商代號、${fixedRecordCount} 筆記錄。建議重新整理頁面確認。`);
+  return { fixedCodes: codes, fixedRecordCount: fixedRecordCount };
 }
 
 /**
