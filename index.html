@@ -1009,7 +1009,7 @@ input[type=checkbox]{width:15px;height:15px;cursor:pointer;accent-color:#1a1917;
         <div class="form-row"><label>👤 處理人員</label><input type="text" id="b-handler" placeholder="空白 = 保留原值"></div>
       </div>
     </div>
-    <div class="batch-modal-footer"><button class="btn" onclick="closeBatchModal()">取消</button><button class="btn btn-dark" onclick="applyBatch()">💾 套用</button></div>
+    <div class="batch-modal-footer"><button class="btn" onclick="closeBatchModal()">取消</button><button class="btn btn-dark" id="batch-apply-btn" onclick="applyBatch()">💾 套用</button></div>
   </div>
 </div>
 
@@ -2473,17 +2473,33 @@ async function doTransfer(){
       if(res) res.forEach(x=>returnRecords.unshift(dbToReturn(x)));
     }
     // ── 從追蹤清單移除已轉入的品項（從大到小刪，避免 index 錯位）──
-    idxToRemove.sort((a,b)=>b-a).forEach(idx=>{
+    // 只有刪除真的成功才從畫面移除；失敗則保留在畫面上並明確告知，
+    // 避免「畫面已消失、資料庫其實還在」的不一致（沿用 deleteRecord
+    // 已驗證過的 Server-first 模式）
+    let deleteFailCount = 0;
+    for(const idx of idxToRemove.sort((a,b)=>b-a)){
       const r=records[idx];
       if(r&&r.id){
-        sbFetch('DELETE', TABLE+'?id=eq.'+r.id, null).catch(e=>console.error('刪除追蹤清單失敗：',e));
+        try{
+          await sbFetch('DELETE', TABLE+'?id=eq.'+r.id, null);
+          records.splice(idx,1);
+        }catch(e){
+          console.error('刪除追蹤清單失敗：',e);
+          deleteFailCount++;
+        }
+      }else{
+        records.splice(idx,1);
       }
-      records.splice(idx,1);
-    });
+    }
     renderTable();updateStats();
     renderReturnTable();
-    showToast('✓ 已轉入 '+checked.length+' 筆至廠退資料庫，並從追蹤清單移除');
-    setSyncStatus('ok','✓ 已同步');
+    if(deleteFailCount>0){
+      showToast('⚠ 已轉入 '+checked.length+' 筆，但 '+deleteFailCount+' 筆從追蹤清單移除失敗，請重新整理後手動處理', 5000);
+      setSyncStatus('err','✗ 部分同步失敗');
+    }else{
+      showToast('✓ 已轉入 '+checked.length+' 筆至廠退資料庫，並從追蹤清單移除');
+      setSyncStatus('ok','✓ 已同步');
+    }
   }catch(e){showToast('⚠ 轉入失敗：'+e.message,4000);}
   hideLoading();
 }
@@ -2604,15 +2620,23 @@ async function applyMissingItems(){
       }
     }
 
-    // ── 刪除（DB + 記憶體）──
+    // ── 刪除（DB + 記憶體）：只有刪除真的成功才從畫面移除 ──
     const allToRemove = [...toTransfer, ...toDelete];
+    let deleteFailCount = 0;
     for(const r of allToRemove){
       if(r.id){
-        await sbFetch('DELETE', TABLE+'?id=eq.'+r.id, null)
-          .catch(e => console.error('刪除失敗：',e));
+        try{
+          await sbFetch('DELETE', TABLE+'?id=eq.'+r.id, null);
+          const idx = records.indexOf(r);
+          if(idx !== -1) records.splice(idx, 1);
+        }catch(e){
+          console.error('刪除失敗：',e);
+          deleteFailCount++;
+        }
+      }else{
+        const idx = records.indexOf(r);
+        if(idx !== -1) records.splice(idx, 1);
       }
-      const idx = records.indexOf(r);
-      if(idx !== -1) records.splice(idx, 1);
     }
 
     // ── 保留的品項放回 records ──
@@ -2628,7 +2652,9 @@ async function applyMissingItems(){
     if(toTransfer.length) msg += `：轉入廠退 ${toTransfer.length} 筆`;
     if(toDelete.length)   msg += `、刪除 ${toDelete.length} 筆`;
     if(toKeep.length)     msg += `、保留 ${toKeep.length} 筆`;
-    showToast(msg, 4000);
+    if(deleteFailCount>0) msg += `　⚠ ${deleteFailCount} 筆從追蹤清單移除失敗，請重新整理後手動處理`;
+    showToast(msg, deleteFailCount>0 ? 5000 : 4000);
+    if(deleteFailCount>0) setSyncStatus('err','✗ 部分同步失敗');
 
   }catch(err){
     console.error('applyMissingItems error:', err);
@@ -3810,9 +3836,13 @@ function onRowCheck(cb){const idx=parseInt(cb.dataset.idx);if(cb.checked)selecte
 function toggleCheckAll(cb){document.querySelectorAll('.row-check').forEach(function(el){el.checked=cb.checked;const idx=parseInt(el.dataset.idx);if(cb.checked)selectedIdx.add(idx);else selectedIdx.delete(idx);});updateBatchBar();}
 function updateBatchBar(){const bar=document.getElementById('batch-bar');document.getElementById('batch-count-label').textContent='已選 '+selectedIdx.size+' 筆';if(selectedIdx.size>0)bar.classList.add('show');else bar.classList.remove('show');}
 function clearSelection(){selectedIdx.clear();document.querySelectorAll('.row-check').forEach(function(el){el.checked=false;});var ca=document.getElementById('check-all');if(ca)ca.checked=false;updateBatchBar();}
-function openBatchModal(){if(!selectedIdx.size)return;document.getElementById('batch-modal-count').textContent=selectedIdx.size;['b-reply','b-date','b-returnDate','b-reason','b-note','b-handler'].forEach(function(id){document.getElementById(id).value='';});document.getElementById('batch-modal-overlay').classList.add('open');}
+function openBatchModal(){if(!selectedIdx.size)return;document.getElementById('batch-modal-count').textContent=selectedIdx.size;['b-reply','b-date','b-returnDate','b-reason','b-note','b-handler'].forEach(function(id){document.getElementById(id).value='';});var applyBtn=document.getElementById('batch-apply-btn');if(applyBtn)applyBtn.disabled=false;document.getElementById('batch-modal-overlay').classList.add('open');}
 function closeBatchModal(){document.getElementById('batch-modal-overlay').classList.remove('open');}
 async function applyBatch(){
+  const btn = document.getElementById('batch-apply-btn');
+  if(btn && btn.disabled) return; // 防止重複點擊：正在處理中，直接忽略
+  if(btn) btn.disabled = true;
+
   const reply=document.getElementById('b-reply').value,date=document.getElementById('b-date').value,returnDate=document.getElementById('b-returnDate').value,reason=document.getElementById('b-reason').value,note=document.getElementById('b-note').value,handler=document.getElementById('b-handler').value,cnt=selectedIdx.size;
 
   // ── ADR-001 Principle 5：批次操作以每一筆記錄為單位判斷可逆性，
@@ -3834,6 +3864,8 @@ async function applyBatch(){
   const results = await Promise.all(promises);
   const successCount = results.filter(function(res){ return res.success; }).length;
   const failCount = cnt - successCount;
+
+  if(btn) btn.disabled = false; // 恢復按鈕，不論成敗（Modal 隨後會關閉，此舉主要防範關閉前的重複點擊）
 
   // 不論成敗都執行收尾：Coordinator 保證每一筆結束後狀態一致
   // （成功=新值、失敗=完整恢復舊值），畫面刷新永遠反映真實結果
