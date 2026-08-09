@@ -921,7 +921,7 @@ input[type=checkbox]{width:15px;height:15px;cursor:pointer;accent-color:#1a1917;
 </div>
 
 <!-- ═══════════════════════════════════════
-     供應商代號合併確認視窗（Step 2，尚未接線至 openReturnNoticeModal）
+     供應商代號合併確認視窗（已接線至 openReturnNoticeModal）
 ════════════════════════════════════════ -->
 <div class="modal-overlay" id="supplier-merge-modal">
   <div class="modal" style="width:600px;max-width:96vw">
@@ -1348,10 +1348,10 @@ input[type=checkbox]{width:15px;height:15px;cursor:pointer;accent-color:#1a1917;
 //   5. 同步將「發信通知廠商日期」填入今天
 // ══════════════════════════════════════════════════
 
-// ── 供應商代號重複判定（純函式，尚未接線）──
+// ── 供應商代號重複判定（純函式）──
 // 不呼叫 sbFetch、不修改輸入的 groups、不碰任何 UI
 // 用途：偵測「代號不同、但可能是同一家供應商」的分組，供退貨通知單
-// 合併判定使用。目前僅為獨立函式，openReturnNoticeModal 尚未呼叫它。
+// 合併判定使用。由 openReturnNoticeModal 透過 openSupplierMergeModal 呼叫。
 
 // 常見公司體制字樣，由長到短排列（避免短字樣先比對造成殘留）
 const COMPANY_SUFFIXES = ['股份有限公司', '有限公司', '企業社', '商行', '工作室'];
@@ -1449,7 +1449,7 @@ function detectSupplierDuplicates(groups) {
   return { suggestions: suggestions, unmatchedGroups: unmatchedGroups };
 }
 
-// ── 供應商合併確認視窗（獨立模組，尚未接線到 openReturnNoticeModal）──
+// ── 供應商合併確認視窗（已接線到 openReturnNoticeModal）──
 // 用法（可於 Console 手動測試）：
 //   openSupplierMergeModal(groups, function(mergedGroups){ console.log(mergedGroups); })
 // 若 detectSupplierDuplicates 沒有任何建議，會直接呼叫 onConfirm(groups)，
@@ -3273,8 +3273,9 @@ async function saveRecord(r){
 
 // ══════════════════════════════════════
 // ADR-006：Record Update Coordinator
-// Ticket 3A — 純協調邏輯落地，尚未接線（saveEdit / applyBatch
-// 皆尚未呼叫此函式，目前無任何呼叫點，對正式系統零影響）
+// Ticket 3A/3C/3D — 已完成接線：saveEdit()、applyBatch() 皆透過
+// 本函式完成單筆資料的安全提交（Sprint 3 Final Audit 已於
+// 2026/8/8 逐項確認接線正確，詳見 Ticket3A_實作與稽核完整報告）
 //
 // 責任邊界：
 // - 只負責單筆資料的安全提交（snapshot → apply → saveRecord
@@ -3337,16 +3338,22 @@ async function saveAllRecords(){
       await sbFetch('DELETE', TABLE+'?id=in.('+diff.toDelete.join(',')+')', null);
     }
 
-    // 步驟 4：PATCH（逐筆，依序 await，只送真正有差異的欄位）
+    // 步驟 4：PATCH（平行送出，每筆針對不同 id、彼此完全獨立，
+    // 符合 ADR-001 Principle 5，可安全平行處理，大幅縮短大量
+    // 異動時的匯入時間；每筆各自 catch，單筆失敗不影響其他筆，
+    // 維持 ADR-002「允許 Partial Success」的精神）
     const SYNC_FIELD_TO_DB_COLUMN = { sn:'sn', sup:'sup', cat:'cat', name:'name', qty:'qty', supplierName:'supplier_name' };
-    for(const item of diff.toUpdate){
+    const patchPromises = diff.toUpdate.map(function(item){
       const body = {};
       Object.keys(item).forEach(function(k){
         if(k==='id' || k==='key') return;
         body[SYNC_FIELD_TO_DB_COLUMN[k] || k] = item[k];
       });
-      await sbFetch('PATCH', TABLE+'?id=eq.'+item.id, body);
-    }
+      return sbFetch('PATCH', TABLE+'?id=eq.'+item.id, body).catch(function(err){
+        console.error('PATCH 失敗 id='+item.id, err);
+      });
+    });
+    await Promise.all(patchPromises);
 
     // 步驟 5：POST（新增，維持每 100 筆一批，沿用既有慣例）
     if(diff.toInsert.length){
@@ -3807,11 +3814,41 @@ function openBatchModal(){if(!selectedIdx.size)return;document.getElementById('b
 function closeBatchModal(){document.getElementById('batch-modal-overlay').classList.remove('open');}
 async function applyBatch(){
   const reply=document.getElementById('b-reply').value,date=document.getElementById('b-date').value,returnDate=document.getElementById('b-returnDate').value,reason=document.getElementById('b-reason').value,note=document.getElementById('b-note').value,handler=document.getElementById('b-handler').value,cnt=selectedIdx.size;
-  const promises=[];
-  selectedIdx.forEach(function(idx){const r=records[idx];if(reply)r.reply=reply;if(date)r.date=date;if(returnDate)r.returnDate=returnDate;if(reason)r.reason=reason;if(note)r.note=note;if(handler)r.handler=handler;r.updatedAt=todayStr();promises.push(saveRecord(r));});
-  await Promise.all(promises);
-  closeBatchModal();clearSelection();renderTable();updateStats();
-  showToast('✓ 已批次更新 '+cnt+' 筆');setSyncStatus('ok','✓ 已同步');
+
+  // ── ADR-001 Principle 5：批次操作以每一筆記錄為單位判斷可逆性，
+  // Partial Success 為正常結果。每一筆各自呼叫 Coordinator 安全提交，
+  // commitRecordChanges 保證不拋出例外，Promise.all 不會提前中斷 ──
+  const promises = [];
+  selectedIdx.forEach(function(idx){
+    const r = records[idx];
+    const changes = { updatedAt: todayStr() };
+    if(reply)      changes.reply      = reply;
+    if(date)       changes.date       = date;
+    if(returnDate) changes.returnDate = returnDate;
+    if(reason)     changes.reason     = reason;
+    if(note)       changes.note       = note;
+    if(handler)    changes.handler    = handler;
+    promises.push(commitRecordChanges(r, changes));
+  });
+
+  const results = await Promise.all(promises);
+  const successCount = results.filter(function(res){ return res.success; }).length;
+  const failCount = cnt - successCount;
+
+  // 不論成敗都執行收尾：Coordinator 保證每一筆結束後狀態一致
+  // （成功=新值、失敗=完整恢復舊值），畫面刷新永遠反映真實結果
+  closeBatchModal(); clearSelection(); renderTable(); updateStats();
+
+  if(failCount === 0){
+    showToast('✓ 已批次更新 '+cnt+' 筆');
+    setSyncStatus('ok','✓ 已同步');
+  }else if(successCount === 0){
+    showToast('⚠ 批次更新失敗：0 / '+cnt+' 筆成功', 4000);
+    setSyncStatus('err','✗ 同步失敗');
+  }else{
+    showToast('⚠ 批次更新完成：成功 '+successCount+' 筆，失敗 '+failCount+' 筆', 4000);
+    setSyncStatus('err','✗ 部分同步失敗');
+  }
 }
 
 // ── 單筆編輯 ──
@@ -3860,50 +3897,43 @@ async function saveEdit(){
     return;
   }
 
-  // ── 保存修改前的欄位快照，供 API 失敗時 rollback（ADR-001 Principle 4）──
-  const snapshot = {
-    reply: r.reply, loc: r.loc, reason: r.reason, date: r.date,
-    returnDate: r.returnDate, notifyDate: r.notifyDate, note: r.note,
-    handler: r.handler, isExpiry: r.isExpiry, expiryDate: r.expiryDate,
-    updatedAt: r.updatedAt, supplierName: r.supplierName
+  // ── 讀取表單值，組成 changes（ADR-006：Sparse Change Principle，
+  // Coordinator 會照單全收，不推論、不篩選）──
+  const newSupName = document.getElementById('m-supplierName').value.trim();
+  const changes = {
+    reply:        document.getElementById('m-reply').value,
+    loc:          document.getElementById('m-loc').value.trim() || r.loc,
+    reason:       document.getElementById('m-reason').value,
+    date:         document.getElementById('m-date').value,
+    returnDate:   document.getElementById('m-returnDate').value,
+    notifyDate:   document.getElementById('m-notifyDate').value,
+    note:         document.getElementById('m-note').value,
+    handler:      document.getElementById('m-handler').value,
+    isExpiry:     isExpiry,
+    expiryDate:   isExpiry ? expiryDate : '',
+    updatedAt:    todayStr(),
+    supplierName: newSupName || (r.supplierName || '')
   };
 
-  // ── 讀取表單值 ──
-  r.reply      = document.getElementById('m-reply').value;
-  r.loc        = document.getElementById('m-loc').value.trim()||r.loc;
-  r.reason     = document.getElementById('m-reason').value;
-  r.date       = document.getElementById('m-date').value;
-  r.returnDate = document.getElementById('m-returnDate').value;
-  r.notifyDate = document.getElementById('m-notifyDate').value;
-  r.note       = document.getElementById('m-note').value;
-  r.handler    = document.getElementById('m-handler').value;
-  r.isExpiry   = isExpiry;
-  r.expiryDate = isExpiry ? expiryDate : '';
-  r.updatedAt  = todayStr();
-
-  // ── 供應商名稱：自動學習記憶 ──
-  const newSupName = document.getElementById('m-supplierName').value.trim();
+  // ── 供應商名稱：自動學習記憶（維持原本時機與行為，跟本次
+  // commitRecordChanges 的成敗無關，獨立背景執行，不 await）──
   if(newSupName){
-    r.supplierName = newSupName;
-    // 若名稱有填寫，自動儲存到 Supabase suppliers 資料表
-    // 不 await，背景執行不阻塞儲存流程
     saveSupplierName(r.sup, newSupName).catch(function(e){
       console.error('自動記憶供應商名稱失敗：', e);
     });
-  } else {
-    r.supplierName = r.supplierName || '';
   }
 
   closeModal();
-  try{
-    await saveRecord(r);
+
+  // ── ADR-006 Record Update Coordinator：snapshot → apply → saveRecord
+  // → 成功 Commit／失敗 Rollback，一致狀態保證由 Coordinator 負責 ──
+  const result = await commitRecordChanges(r, changes);
+  if(result.success){
     setSyncStatus('ok','✓ 已同步');
     showToast('✓ 已儲存');
-  }catch(e){
-    // ── API 失敗，rollback 回修改前的欄位值（ADR-001 Principle 6：Commit 以 API 結果為準）──
-    Object.assign(r, snapshot);
+  }else{
     setSyncStatus('err','✗ 同步失敗');
-    showToast('⚠ 儲存失敗：'+e.message, 4000);
+    showToast('⚠ 儲存失敗：'+result.error.message, 4000);
   }
   renderTable(); updateStats();
 }
